@@ -1,6 +1,7 @@
 import { GraphQLClient, gql } from 'graphql-request';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getToken } from './get_token';
+import { NextRequest, NextResponse } from 'next/server';
 
 interface RunpodConfig {
   apiKey: string;
@@ -189,10 +190,10 @@ const runpodQuery = gql`
   }
 `;
 
-const routeToRunpod = async (req: NextApiRequest, res: NextApiResponse) => {
+
+const routeToRunpod = async (req: NextRequest, res: NextResponse) => {
   const { RUNPOD_API_KEY } = process.env;
-  // Strip the protocol and hostname from URL to match the middleware storage key.
-  const endpointPath = new URL(req.url, `http://${req.headers.host}`).pathname;
+  const endpointPath = req.nextUrl.pathname;
   const endpointId = endpointStore[endpointPath];
 
   console.log(`Request URL: ${req.url}`);
@@ -202,28 +203,19 @@ const routeToRunpod = async (req: NextApiRequest, res: NextApiResponse) => {
 
   if (!RUNPOD_API_KEY || !endpointId) {
     console.error('RUNPOD_API_KEY and endpointId must be defined.');
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'RUNPOD_API_KEY and endpointId must be defined.' });
-    }
-    return;
+    return new NextResponse(JSON.stringify({ error: 'RUNPOD_API_KEY and endpointId must be defined.' }), { status: 500 });
   }
 
   const client = await createGraphQLClient();
 
   try {
-    const variables = { input: req.body, endpointId };
+    const variables = { input: await req.json(), endpointId };
     const response = await client.request(runpodQuery, variables);
-
-    if (!res.headersSent) {
-      res.status(200).json(response.runFunction);
-    }
+    return new NextResponse(JSON.stringify(response.runFunction), { status: 200 });
   } catch (error: any) {
     console.error('Error running function:', JSON.stringify(error, null, 2));
-    if (!res.headersSent) {
-      res.status(500).json({ error: error.message });
-    }
+    return new NextResponse(JSON.stringify({ error: error.message }), { status: 500 });
   }
 };
-
 
 export { createEndpoint, checkEndpoint, routeToRunpod, endpointStore };
