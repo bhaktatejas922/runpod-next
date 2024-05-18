@@ -24,12 +24,25 @@ const defaultConfig: Partial<RunpodConfig> = {
   workersMin: 0,
 };
 
-const createGraphQLClient = async (apiKey: string) => {
-  const token = await getToken();
+const createGraphQLClient = async () => {
+  // Assuming `getToken` is a function that returns the token
+  const token = await getToken(); // Implement this function to retrieve the token
   return new GraphQLClient('https://api.runpod.io/graphql', {
     headers: {
       'content-type': 'application/json',
-      'authorization': `Bearer ${token}`
+      'authorization': `Bearer ${token}`,
+      'accept': '*/*',
+      'accept-language': 'en-US,en;q=0.9',
+      'origin': 'https://www.runpod.io',
+      'referer': 'https://www.runpod.io/',
+      'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"macOS"',
+      'sec-fetch-dest': 'empty',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-site': 'same-site',
+      'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'x-team-id': 'null',
     },
   });
 };
@@ -46,7 +59,7 @@ const createEndpoint = async (config: Partial<RunpodConfig>) => {
     throw new Error('Endpoint name, GPU IDs, and template ID are required.');
   }
 
-  const client = await createGraphQLClient(mergedConfig.apiKey);
+  const client = await createGraphQLClient();
 
   const mutation = gql`
     mutation saveEndpoint($input: EndpointInput!) {
@@ -69,26 +82,22 @@ const createEndpoint = async (config: Partial<RunpodConfig>) => {
   const variables = {
     input: {
       gpuIds: mergedConfig.gpuIds,
-      gpuCount: 1,
-      allowedCudaVersions: "",
       idleTimeout: mergedConfig.idleTimeout,
       locations: mergedConfig.locations,
       name: mergedConfig.endpointName,
-      networkVolumeId: null,
       scalerType: mergedConfig.scalerType,
       scalerValue: mergedConfig.scalerValue,
-      templateId: mergedConfig.templateId,
+      // templateId: mergedConfig.templateId,
       workersMax: mergedConfig.workersMax,
       workersMin: mergedConfig.workersMin,
-      executionTimeoutMs: 600000,
       template: {
-        containerDiskInGb: 5,
-        containerRegistryAuthId: "",
-        dockerArgs: "",
-        env: [],
-        imageName: mergedConfig.templateId,
-        startScript: "",
-        name: `${mergedConfig.endpointName}__template`
+        containerDiskInGb: 5, // Assuming a default value, adjust as needed
+        containerRegistryAuthId: "", // Assuming a default value, adjust as needed
+        dockerArgs: "", // Assuming a default value, adjust as needed
+        env: [], // Assuming a default value, adjust as needed
+        imageName: "runpod-torch-v21", // Assuming a default value, adjust as needed
+        startScript: "", // Assuming a default value, adjust as needed
+        name: `${mergedConfig.endpointName}__template`, // Assuming a default value, adjust as needed
       },
     },
   };
@@ -103,28 +112,71 @@ const createEndpoint = async (config: Partial<RunpodConfig>) => {
 };
 
 const checkEndpoint = async (config: RunpodConfig) => {
-  const client = await createGraphQLClient(config.apiKey);
+  const client = await createGraphQLClient();
 
   const query = gql`
-    query {
+    query getEndpoints {
       myself {
-        endpoints {
-          id
-          name
+        id
+        serverlessDiscount {
+          discountFactor
+          type
+          expirationDate
+          __typename
         }
+        endpoints {
+          aiKey
+          gpuIds
+          allowedCudaVersions
+          id
+          idleTimeout
+          locations
+          name
+          networkVolumeId
+          pods {
+            desiredStatus
+            __typename
+          }
+          scalerType
+          scalerValue
+          templateId
+          userId
+          workersMax
+          workersMin
+          gpuCount
+          instanceIds
+          computeType
+          template {
+            containerDiskInGb
+            containerRegistryAuthId
+            dockerArgs
+            env {
+              key
+              value
+              __typename
+            }
+            imageName
+            boundEndpointId
+            __typename
+          }
+          executionTimeoutMs
+          __typename
+        }
+        __typename
       }
     }
   `;
 
   try {
-    const response = await client.request(query);
+    const response = await client.request(query, {});
     const endpoint = response.myself.endpoints.find((ep: { name: string }) => ep.name === config.endpointName);
     return endpoint;
   } catch (error) {
-    console.error('Error checking endpoint:', error.response?.errors || error.message);
+    console.error('Error checking endpoint:', JSON.stringify(error, null, 2));
     throw new Error('Failed to check endpoint');
   }
 };
+
 
 const endpointStore: { [key: string]: string } = {};
 
@@ -139,7 +191,14 @@ const runpodQuery = gql`
 
 const routeToRunpod = async (req: NextApiRequest, res: NextApiResponse) => {
   const { RUNPOD_API_KEY } = process.env;
-  const endpointId = endpointStore[req.url || ''];
+  // Strip the protocol and hostname from URL to match the middleware storage key.
+  const endpointPath = new URL(req.url, `http://${req.headers.host}`).pathname;
+  const endpointId = endpointStore[endpointPath];
+
+  console.log(`Request URL: ${req.url}`);
+  console.log(`Endpoint Path: ${endpointPath}`);
+  console.log(`Retrieved endpointId: ${endpointId}`);
+  console.log(`Endpoint Store: ${JSON.stringify(endpointStore)}`);
 
   if (!RUNPOD_API_KEY || !endpointId) {
     console.error('RUNPOD_API_KEY and endpointId must be defined.');
@@ -149,7 +208,7 @@ const routeToRunpod = async (req: NextApiRequest, res: NextApiResponse) => {
     return;
   }
 
-  const client = await createGraphQLClient(RUNPOD_API_KEY);
+  const client = await createGraphQLClient();
 
   try {
     const variables = { input: req.body, endpointId };
@@ -159,11 +218,12 @@ const routeToRunpod = async (req: NextApiRequest, res: NextApiResponse) => {
       res.status(200).json(response.runFunction);
     }
   } catch (error: any) {
-    console.error('Error running function:', error.response?.errors || error.message);
+    console.error('Error running function:', JSON.stringify(error, null, 2));
     if (!res.headersSent) {
       res.status(500).json({ error: error.message });
     }
   }
 };
+
 
 export { createEndpoint, checkEndpoint, routeToRunpod, endpointStore };

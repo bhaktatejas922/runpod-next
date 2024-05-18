@@ -28,9 +28,12 @@ const getToken = async () => {
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    const data = await response.json();
-    // console.log('Token:', data);
-    return data;
+    const data: { object: string; jwt: string } = await response.json();
+    if (data.object === 'token' && data.jwt) {
+      return data.jwt;
+    } else {
+      throw new Error('Invalid token response');
+    }
   } catch (error) {
     console.error('Error fetching token:', error);
     throw new Error('Failed to fetch token');
